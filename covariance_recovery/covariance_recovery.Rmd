@@ -1,0 +1,133 @@
+---
+title: "Covariance Recovery"
+author: "Colin Bailey"
+date: '2023-01-18'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(rstan)
+library(shinystan)
+library(bayesplot)
+library(pkgbuild)
+library(boot)
+library(loo)
+library(MASS)
+memory.limit(size=100000)
+
+pkgbuild::has_build_tools(debug = TRUE)
+
+rstan_options(auto_write=T)
+
+options(mc.cores = parallel::detectCores())
+
+
+```
+
+
+```{r multivariate data simulation and test}
+
+#switching between correlation and covariation
+cov <- matrix(data = c(9,5,5,9), nrow = 2, ncol = 2)
+
+#show the correlation between the datasets specified by the covariance matrix
+cov2cor(cov)[1,2]
+
+p_var <- rnorm(n = 30, mean = 0, sd = 5)
+nsim <- 30
+alpha <- c(5, 7)
+beta <- c(4, 9)
+
+dat <- data.frame(seq(1:30), rep(99, 30), rep(99, 30))
+names(dat) <- c("year", "tsa", "tsb")
+
+for(i in 1:nsim){
+  dat[i,2:3] <- mvrnorm(n = 1,
+                        mu = alpha + beta * p_var[i],
+                        Sigma = cov)
+}
+
+#running a test Stan model
+dat0 <- list("N" = nrow(dat),
+             "K" = ncol(dat)-1,
+             "tsx" = t(dat[,2:3]),
+             "p_var" = p_var,
+             "year" = dat$year)
+
+#set starting values to 0
+init_fx <- function(chain_id)
+{
+  list("alpha" = c(5,5),
+       "beta" = c(0,0))
+}
+
+
+multi_fit <- stan(file = "multivariate_model.stan", data = dat0, chains=6,
+                     iter=10000, cores=6, thin = 1,
+                     control=list("max_treedepth"=10,"adapt_delta"=0.8),
+                     pars=c("alpha", "beta", "sigma", "Omega", "Sigma", "nuY"), 
+                     init = init_fx)
+
+pairs(multi_fit, pars = c("alpha", "beta", "sigma"))
+
+summary(multi_fit)
+```
+
+
+```{r multivariate timeseries data simulation and test}
+
+#switching between correlation and covariation
+cov <- matrix(data = c(30,5,5,20), nrow = 2, ncol = 2)
+
+#show the correlation between the datasets specified by the covariance matrix
+cov2cor(cov)[1,2]
+
+p_var <- rnorm(n = 30, mean = 0, sd = 5)
+nsim <- 30
+alpha <- c(5, 7)
+beta <- c(4, 9)
+phi <- 0.5
+
+dat <- data.frame(seq(1:30), rep(99, 30), rep(99, 30))
+names(dat) <- c("year", "tsa", "tsb")
+
+
+dat[1,2:3] <- mvrnorm(n = 1,
+                      mu = alpha + beta * p_var[1],
+                      Sigma = cov)
+for(i in 2:nsim){
+  dat[i,2:3] <- mvrnorm(n = 1,
+                        mu = alpha + beta * p_var[i] + phi * as.numeric(dat[i-1,2:3]),
+                        Sigma = cov)
+}
+
+#running a test Stan model
+dat0 <- list("N" = nrow(dat),
+             "K" = ncol(dat)-1,
+             "tsx" = t(dat[,2:3]),
+             "p_var" = p_var,
+             "year" = dat$year)
+
+#set starting values to 0
+init_fx <- function(chain_id)
+{
+  list("alpha" = c(5,5),
+       "beta" = c(0,0))
+}
+
+
+multi_fit <- stan(file = "multivariate_ar1_model.stan", data = dat0, chains=6,
+                     iter=10000, cores=6, thin = 1,
+                     control=list("max_treedepth"=10,"adapt_delta"=0.8),
+                     pars=c("alpha", "beta", "sigma", "phi", "Omega", "Sigma", "nuY"), 
+                     init = init_fx)
+
+pairs(multi_fit, pars = c("alpha", "beta", "sigma"))
+
+summary(multi_fit)$summary
+
+```
+
